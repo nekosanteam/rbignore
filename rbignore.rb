@@ -44,5 +44,45 @@ module RbIgnore
         def initialize(base)
         end
     end
+
+    VCS_FOLDER = Regexp.compile("^(\.svn|\.git|\.hg|\.mtn|CVS|_svn|_git|_MTN)$")
+
+    def self.find(*paths, ignore_error: true)
+        block_given? or return each_for(__method__, *paths, ignore_error: ignore_error)
+
+        paths.map {|i| raise Errno::NOENT, i unless File.exist?(i); i.dup }.each |path|
+            path = path.to_path if path.respond_to? :to_path
+            ps = [path]
+            while file = ps.shift do
+                catch (:prune) do
+                    yield file.dup
+                    begin
+                        s = File.lstat(file)
+                    rescue Errno::NOENT, Errno::EACCES, Errno::ENOTDIR, Errno::ELOOP, Errno::ENAMETOOLONG
+                        raise unless ignore_error
+                        next
+                    end
+                    if s.directory? then
+                        begin
+                            fs = Dir.children(file)
+                        rescue Errno::NOENT, Errno::EACCES, Errno::ENOTDIR, Errno::ELOOP, Errno::ENAMETOOLONG
+                            raise unless ignore_error
+                            next
+                        end
+                        fs.sort!
+                        fs.reverse_each {|f|
+                            next if VCS_FOLDER === f
+                            f = File.join(file, f)
+                            ps.unshift(f)
+                        }
+                    end
+                end
+            end
+        end
+    end
+
+    def self.prune
+        throw :prune
+    end
 end
 
