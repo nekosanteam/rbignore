@@ -30,11 +30,6 @@ module RbIgnore
         end
     end
 
-    class WalkBuilder
-        def initialize(base)
-        end
-    end
-
     class ParallelWalk
         def initialize(base)
         end
@@ -45,36 +40,95 @@ module RbIgnore
         end
     end
 
+    class WalkBuilder
+        def initialize(base)
+            @ignores = []
+            @ignore_error = true
+        end
+
+        def ignored(f)
+            @ignores.any do |r|
+                r.match(f)
+            end
+        end
+
+        def find(*paths)
+            block_given? or return each_for(__method__, *paths, ignore_error: @ignore_error)
+
+            paths.map {|i| raise Errno::ENOENT, i unless File.exist?(i); i.dup }.each do |path|
+                path = path.to_path if path.respond_to? :to_path
+                ps = [path]
+                while file = ps.shift do
+                    catch (:prune) do
+                        begin
+                            s = File.lstat(file)
+                        rescue Errno::ENOENT, Errno::EACCES, Errno::ENOTDIR, Errno::ELOOP, Errno::ENAMETOOLONG
+                            raise unless ignore_error
+                            next
+                        end
+                        if s.directory? then
+                            yield file.dup + "/"
+                            begin
+                                fs = Dir.children(file)
+                            rescue Errno::ENOENT, Errno::EACCES, Errno::ENOTDIR, Errno::ELOOP, Errno::ENAMETOOLONG
+                                raise unless ignore_error
+                                next
+                            end
+                            fs.sort!
+                            fs.reverse_each {|f|
+                                next if is_vcs_folder(f)
+                                f = File.join(file, f)
+                                ps.unshift(f)
+                            }
+                        else
+                            yield file.dup
+                        end
+                    end
+                end
+            end
+        end
+    end
+
     VCS_FOLDER = Regexp.compile("^(\.svn|\.git|\.hg|\.mtn|CVS|_svn|_git|_MTN)$")
+
+    def self.is_vcs_folder(f)
+        if VCS_FOLDER === f then
+            return true
+        else
+            return false
+        end
+    end
 
     def self.find(*paths, ignore_error: true)
         block_given? or return each_for(__method__, *paths, ignore_error: ignore_error)
 
-        paths.map {|i| raise Errno::NOENT, i unless File.exist?(i); i.dup }.each |path|
+        paths.map {|i| raise Errno::ENOENT, i unless File.exist?(i); i.dup }.each do |path|
             path = path.to_path if path.respond_to? :to_path
             ps = [path]
             while file = ps.shift do
                 catch (:prune) do
-                    yield file.dup
                     begin
                         s = File.lstat(file)
-                    rescue Errno::NOENT, Errno::EACCES, Errno::ENOTDIR, Errno::ELOOP, Errno::ENAMETOOLONG
+                    rescue Errno::ENOENT, Errno::EACCES, Errno::ENOTDIR, Errno::ELOOP, Errno::ENAMETOOLONG
                         raise unless ignore_error
                         next
                     end
                     if s.directory? then
+                        yield file.dup + "/"
                         begin
                             fs = Dir.children(file)
-                        rescue Errno::NOENT, Errno::EACCES, Errno::ENOTDIR, Errno::ELOOP, Errno::ENAMETOOLONG
+                        rescue Errno::ENOENT, Errno::EACCES, Errno::ENOTDIR, Errno::ELOOP, Errno::ENAMETOOLONG
                             raise unless ignore_error
                             next
                         end
                         fs.sort!
                         fs.reverse_each {|f|
-                            next if VCS_FOLDER === f
+                            next if is_vcs_folder(f)
                             f = File.join(file, f)
                             ps.unshift(f)
                         }
+                    else
+                        yield file.dup
                     end
                 end
             end
